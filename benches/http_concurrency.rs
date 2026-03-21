@@ -80,6 +80,12 @@ async fn main() {
         rest_addr: "127.0.0.1:0"
             .parse()
             .expect("static address literal must parse"),
+        https_mcp_addr: None,
+        https_rest_addr: None,
+        tls_cert_path: temp_dir.path().join("cert.pem"),
+        tls_key_path: temp_dir.path().join("key.pem"),
+        dashboard_addr: None,
+        dashboard_pin: None,
     };
 
     let handles = start_servers(config)
