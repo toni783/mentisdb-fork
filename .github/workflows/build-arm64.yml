@@ -6,9 +6,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target: [aarch64-unknown-linux-gnu]
     
     steps:
       - uses: actions/checkout@v4
@@ -16,12 +13,16 @@ jobs:
       - name: Install cross compile toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          sudo apt-get install -y gcc-aarch64-linux-gnu libssl-dev crossbuild-essential
       
       - name: Add target
         run: rustup target add aarch64-unknown-linux-gnu
       
       - name: Build
+        env:
+          OPENSSL_DIR: /usr/aarch64-linux-gnu
+          OPENSSL_LIB_DIR: /usr/aarch64-linux-gnu/lib
+          OPENSSL_INCLUDE_DIR: /usr/aarch64-linux-gnu/include
         run: |
           cargo build --release --target aarch64-unknown-linux-gnu --bin mentisdbd
       
