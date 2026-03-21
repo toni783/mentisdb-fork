@@ -51,7 +51,25 @@
    - New env vars: `MENTISDB_DASHBOARD_PORT` (default 9475; 0 = disabled), `MENTISDB_DASHBOARD_PIN` (default unset)
    - Dashboard URL printed in startup endpoint catalog; both env vars listed in Configuration block
    - `src/server.rs`: `MentisDbService.{chains,skills}` made `pub(crate)`; `MentisDbServerConfig` + `MentisDbServerHandles` extended with dashboard fields; `start_dashboard_server()` added; dashboard shares the same live `Arc<DashMap>` chains and `Arc<RwLock<SkillRegistry>>` as the REST service
- - chore: Bump version to 0.5.0
+ - fix: Chain Summary stale thought/agent counts resolved at startup
+   - `refresh_registered_chain_counts` runs before servers start and writes live counts to the registry
+   - `print_chain_summary` now reads directly from the refreshed registry (no redundant chain re-opens)
+   - `api_chains` dashboard endpoint now uses `get_or_open_chain()` for all chains (eliminates stale fallback from registry)
+ - fix: Thought detail modal missing ID, hash, and creation date
+   - Frontend now reads `thought.id` (with fallback to `thought.thought_id`) and `thought.hash` (with fallback to `thought.thought_hash`)
+   - Hash value is now copyable via a clipboard button (⎘ → ✓ on click)
+ - feat: Chain browser sort order toggle + Genesis/Head navigation
+   - New "⬇ Newest first / ⬆ Oldest first" toggle button (default: newest first)
+   - "⏮ Genesis" and "Head ⏭" jump buttons for fast navigation
+   - Backend: `ThoughtsQuery.order` param; `paginated_thoughts()` accepts `reverse: bool` flag
+ - ux: Startup endpoint catalog shows friendly `my.mentisdb.com` URLs alongside `127.0.0.1` addresses
+ - fix: Agent detail Owner field not displaying saved value
+   - Frontend was reading `agent.agent_owner` but `AgentRecord` serializes the field as `agent.owner`
+ - feat: Agent list table now shows Owner and Thoughts columns
+ - chore: Bump dependencies — diffy 0.3→0.4, axum-server 0.7→0.8, rcgen 0.13→0.14, rodio 0.17→0.22
+   - rodio 0.22 breaking changes: `OutputStream`/`Sink` removed; new API uses `DeviceSinkBuilder::open_default_sink()` + `Player::connect_new()`; `Source` trait: `current_frame_len`→`current_span_len`, `channels()`/`sample_rate()` return `NonZero<u16>`/`NonZero<u32>`
+   - bincode reverted to 2.0.1 (3.0.0 dropped serde compatibility)
+ - chore: MENTISDB_SKILL.md updated to v3 — 10 new undocumented agent patterns documented from borganism-brain chain analysis
 
 0.4.3.8 MAR/16/2026
  - chore: Add Makefile
