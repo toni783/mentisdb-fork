@@ -13,7 +13,7 @@ jobs:
       - name: Install cross compile toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu libssl-dev crossbuild-essential
+          sudo apt-get install -y gcc-aarch64-linux-gnu libssl-dev pkg-config libc6-dev-arm64-cross
       
       - name: Add target
         run: rustup target add aarch64-unknown-linux-gnu
