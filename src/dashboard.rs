@@ -17,7 +17,7 @@
 //! If neither is present the request is redirected to `/dashboard/login`.
 
 use crate::{
-    deregister_chain, load_registered_chains, AgentRecord, AgentStatus, MentisDb,
+    deregister_chain, load_registered_chains, AgentStatus, MentisDb,
     PublicKeyAlgorithm, SkillFormat, SkillRegistry, StorageAdapterKind, Thought, ThoughtInput,
     ThoughtRole, ThoughtType,
 };
@@ -126,7 +126,9 @@ pub(crate) fn dashboard_router(state: DashboardState) -> Router {
         .route("/skills", get(api_skills))
         .route("/skills/{skill_id}", get(api_get_skill))
         .route("/skills/{skill_id}/versions", get(api_skill_versions))
-        .route("/skills/{skill_id}/diff", get(api_skill_diff));
+        .route("/skills/{skill_id}/diff", get(api_skill_diff))
+        .route("/skills/{skill_id}/revoke", post(api_revoke_skill))
+        .route("/skills/{skill_id}/deprecate", post(api_deprecate_skill));
 
     // ── Protected surface (PIN-gated when pin is set) ─────────────────────
     let protected = Router::new()
@@ -466,12 +468,16 @@ async fn api_bootstrap_chain(
             .with_importance(body.importance.unwrap_or(1.0))
             .with_tags(body.tags.clone().unwrap_or_default())
             .with_concepts(body.concepts.clone().unwrap_or_default());
-        chain.append_thought(agent_id, input).map_err(internal_error)?;
+        chain
+            .append_thought(agent_id, input)
+            .map_err(internal_error)?;
         true
     } else {
         false
     };
-    Ok(Json(json!({ "bootstrapped": bootstrapped, "chain_key": chain_key })))
+    Ok(Json(
+        json!({ "bootstrapped": bootstrapped, "chain_key": chain_key }),
+    ))
 }
 
 // ── API: delete chain ─────────────────────────────────────────────────────────
@@ -603,14 +609,29 @@ async fn api_agents_all(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let registry = load_registered_chains(&state.mentisdb_dir).map_err(internal_error)?;
 
-    let mut result: BTreeMap<String, Vec<AgentRecord>> = BTreeMap::new();
+    let mut result: BTreeMap<String, Vec<Value>> = BTreeMap::new();
 
     for chain_key in registry.chains.keys() {
         match get_or_open_chain(&state, chain_key).await {
             Ok(arc) => {
                 let chain = arc.read().await;
-                let agents: Vec<AgentRecord> =
-                    chain.agent_registry().agents.values().cloned().collect();
+                let thoughts = chain.thoughts();
+                let agents: Vec<Value> = chain
+                    .agent_registry()
+                    .agents
+                    .values()
+                    .map(|a| {
+                        let live_count = thoughts
+                            .iter()
+                            .filter(|t| t.agent_id == a.agent_id)
+                            .count() as u64;
+                        let mut v = serde_json::to_value(a).unwrap_or(Value::Null);
+                        if let Value::Object(ref mut m) = v {
+                            m.insert("thought_count".to_string(), live_count.into());
+                        }
+                        v
+                    })
+                    .collect();
                 result.insert(chain_key.clone(), agents);
             }
             Err(_) => {
@@ -631,7 +652,23 @@ async fn api_agents_by_chain(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let arc = get_or_open_chain(&state, &chain_key).await?;
     let chain = arc.read().await;
-    let agents: Vec<&AgentRecord> = chain.agent_registry().agents.values().collect();
+    let thoughts = chain.thoughts();
+    let agents: Vec<Value> = chain
+        .agent_registry()
+        .agents
+        .values()
+        .map(|a| {
+            let live_count = thoughts
+                .iter()
+                .filter(|t| t.agent_id == a.agent_id)
+                .count() as u64;
+            let mut v = serde_json::to_value(a).unwrap_or(Value::Null);
+            if let Value::Object(ref mut m) = v {
+                m.insert("thought_count".to_string(), live_count.into());
+            }
+            v
+        })
+        .collect();
     Ok(Json(serde_json::to_value(agents).map_err(internal_error)?))
 }
 
@@ -859,4 +896,40 @@ async fn api_skill_diff(
 
     let patch = diffy::create_patch(&old_content, &new_content);
     Ok(Json(json!({ "diff": patch.to_string() })))
+}
+
+#[derive(Deserialize)]
+struct SkillStatusBody {
+    reason: Option<String>,
+}
+
+/// `POST /dashboard/api/skills/:skill_id/revoke`
+///
+/// Marks the skill as revoked. The skill's content and version history are
+/// preserved for auditability.
+async fn api_revoke_skill(
+    State(state): State<DashboardState>,
+    Path(skill_id): Path<String>,
+    Json(body): Json<SkillStatusBody>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let mut skills = state.skills.write().await;
+    let summary = skills
+        .revoke_skill(&skill_id, body.reason.as_deref())
+        .map_err(internal_error)?;
+    Ok(Json(serde_json::to_value(summary).map_err(internal_error)?))
+}
+
+/// `POST /dashboard/api/skills/:skill_id/deprecate`
+///
+/// Marks the skill as deprecated.
+async fn api_deprecate_skill(
+    State(state): State<DashboardState>,
+    Path(skill_id): Path<String>,
+    Json(body): Json<SkillStatusBody>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let mut skills = state.skills.write().await;
+    let summary = skills
+        .deprecate_skill(&skill_id, body.reason.as_deref())
+        .map_err(internal_error)?;
+    Ok(Json(serde_json::to_value(summary).map_err(internal_error)?))
 }
