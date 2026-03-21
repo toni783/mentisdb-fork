@@ -15,8 +15,8 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}:/workspace" \
             -w /workspace \
-            ghcr.io/rust-cross/cross:v0.2.4 \
-            cross build --release --target aarch64-unknown-linux-gnu --bin mentisdbd
+            ghcr.io/cross-rs/aarch64-unknown-linux-gnu:latest \
+            make build-mentisdbd
       
       - name: Upload binary
         uses: actions/upload-artifact@v4
