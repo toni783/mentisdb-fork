@@ -16,7 +16,7 @@ jobs:
             -v "${{ github.workspace }}:/workspace" \
             -w /workspace \
             ghcr.io/cross-rs/aarch64-unknown-linux-gnu:latest \
-            make build-mentisdbd
+            cross build --release --bin mentisdbd
       
       - name: Upload binary
         uses: actions/upload-artifact@v4
