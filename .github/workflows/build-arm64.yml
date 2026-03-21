@@ -6,6 +6,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Use ARM64 runner directly - no cross-compilation needed!
     
     steps:
       - uses: actions/checkout@v4
@@ -13,15 +14,12 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       
-      - name: Add ARM64 target
-        run: rustup target add aarch64-unknown-linux-gnu
-      
       - name: Build
         run: |
-          cargo build --release --target aarch64-unknown-linux-gnu --bin mentisdbd
+          cargo build --release --bin mentisdbd
       
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: mentisdbd-arm64
-          path: target/aarch64-unknown-linux-gnu/release/mentisdbd
+          path: target/release/mentisdbd
