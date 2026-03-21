@@ -2,8 +2,8 @@
 //!
 //! This binary starts both:
 //!
-//! - an MCP server
-//! - a REST server
+//! - an MCP server (HTTP and optionally HTTPS)
+//! - a REST server (HTTP and optionally HTTPS)
 //!
 //! Configuration is read from environment variables:
 //!
@@ -15,6 +15,10 @@
 //! - `MENTISDB_BIND_HOST`
 //! - `MENTISDB_MCP_PORT`
 //! - `MENTISDB_REST_PORT`
+//! - `MENTISDB_HTTPS_MCP_PORT` (set to 0 to disable; default 9473)
+//! - `MENTISDB_HTTPS_REST_PORT` (set to 0 to disable; default 9474)
+//! - `MENTISDB_TLS_CERT` (default `~/.mentisdb/tls/cert.pem`)
+//! - `MENTISDB_TLS_KEY` (default `~/.mentisdb/tls/key.pem`)
 //! - `RUST_LOG`
 
 use env_logger::Env;
@@ -106,6 +110,28 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "MENTISDB_REST_PORT",
         Some(config.rest_addr.port().to_string()),
     );
+    print_env_var(
+        "MENTISDB_HTTPS_MCP_PORT",
+        Some(match config.https_mcp_addr {
+            Some(addr) => addr.port().to_string(),
+            None => "disabled".to_string(),
+        }),
+    );
+    print_env_var(
+        "MENTISDB_HTTPS_REST_PORT",
+        Some(match config.https_rest_addr {
+            Some(addr) => addr.port().to_string(),
+            None => "disabled".to_string(),
+        }),
+    );
+    print_env_var(
+        "MENTISDB_TLS_CERT",
+        Some(config.tls_cert_path.display().to_string()),
+    );
+    print_env_var(
+        "MENTISDB_TLS_KEY",
+        Some(config.tls_key_path.display().to_string()),
+    );
 
     let migration_reports = migrate_registered_chains_with_adapter(
         &config.service.chain_dir,
@@ -189,8 +215,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Resolved endpoints:");
     println!("MCP server:  http://{}", handles.mcp.local_addr());
     println!("REST server: http://{}", handles.rest.local_addr());
+    if let Some(ref h) = handles.https_mcp {
+        println!("MCP server:  https://{}", h.local_addr());
+    }
+    if let Some(ref h) = handles.https_rest {
+        println!("REST server: https://{}", h.local_addr());
+    }
     print_endpoint_catalog(&handles);
     print_chain_summary(&config)?;
+    print_tls_tip(&config, &handles);
     println!("Press Ctrl+C to stop.");
 
     tokio::signal::ctrl_c().await?;
@@ -381,6 +414,145 @@ fn print_endpoint_catalog(handles: &MentisDbServerHandles) {
     println!("    POST http://{}/v1/head", handles.rest.local_addr());
     println!("      Return the latest thought at the chain tip and head metadata.");
     println!();
+
+    if let Some(https_mcp) = &handles.https_mcp {
+        println!("  HTTPS MCP");
+        println!("    POST https://{}", https_mcp.local_addr());
+        println!("      Streamable HTTP MCP root endpoint over TLS.");
+        println!("    GET  https://{}/health", https_mcp.local_addr());
+        println!("      Health check for the HTTPS MCP surface.");
+        println!("    POST https://{}/tools/list", https_mcp.local_addr());
+        println!("      Legacy CloudLLM-compatible MCP tool discovery (HTTPS).");
+        println!("    POST https://{}/tools/execute", https_mcp.local_addr());
+        println!("      Legacy CloudLLM-compatible MCP tool execution (HTTPS).");
+    }
+    if let Some(https_rest) = &handles.https_rest {
+        println!("  HTTPS REST");
+        println!("    GET  https://{}/health", https_rest.local_addr());
+        println!("      Health check for the HTTPS REST surface.");
+        println!("    GET  https://{}/v1/chains", https_rest.local_addr());
+        println!("      List chains with version, adapter, counts, and storage location.");
+        println!("    POST https://{}/v1/agents", https_rest.local_addr());
+        println!("      List agent identity summaries for one chain.");
+        println!("    POST https://{}/v1/agent", https_rest.local_addr());
+        println!("      Return one full agent registry record.");
+        println!(
+            "    POST https://{}/v1/agent-registry",
+            https_rest.local_addr()
+        );
+        println!("      Return the full agent registry for one chain.");
+        println!(
+            "    POST https://{}/v1/agents/upsert",
+            https_rest.local_addr()
+        );
+        println!("      Create or update an agent registry record.");
+        println!(
+            "    POST https://{}/v1/agents/description",
+            https_rest.local_addr()
+        );
+        println!("      Set or clear one agent description.");
+        println!(
+            "    POST https://{}/v1/agents/aliases",
+            https_rest.local_addr()
+        );
+        println!("      Add one alias to a registered agent.");
+        println!(
+            "    POST https://{}/v1/agents/keys",
+            https_rest.local_addr()
+        );
+        println!("      Add or replace one agent public key.");
+        println!(
+            "    POST https://{}/v1/agents/keys/revoke",
+            https_rest.local_addr()
+        );
+        println!("      Revoke one agent public key.");
+        println!(
+            "    POST https://{}/v1/agents/disable",
+            https_rest.local_addr()
+        );
+        println!("      Disable one registered agent.");
+        println!(
+            "    GET  https://{}/mentisdb_skill_md",
+            https_rest.local_addr()
+        );
+        println!("      Return the embedded official MentisDB skill Markdown.");
+        println!("    GET  https://{}/v1/skills", https_rest.local_addr());
+        println!("      List uploaded skill summaries from the registry.");
+        println!(
+            "    GET  https://{}/v1/skills/manifest",
+            https_rest.local_addr()
+        );
+        println!("      Describe searchable fields and supported skill formats.");
+        println!(
+            "    POST https://{}/v1/skills/upload",
+            https_rest.local_addr()
+        );
+        println!("      Upload a new immutable skill version.");
+        println!(
+            "    POST https://{}/v1/skills/search",
+            https_rest.local_addr()
+        );
+        println!("      Search skills by metadata, uploader identity, and time window.");
+        println!(
+            "    POST https://{}/v1/skills/read",
+            https_rest.local_addr()
+        );
+        println!("      Read one stored skill as Markdown or JSON with safety warnings.");
+        println!(
+            "    POST https://{}/v1/skills/versions",
+            https_rest.local_addr()
+        );
+        println!("      List immutable uploaded versions for one skill.");
+        println!(
+            "    POST https://{}/v1/skills/deprecate",
+            https_rest.local_addr()
+        );
+        println!("      Mark one skill as deprecated.");
+        println!(
+            "    POST https://{}/v1/skills/revoke",
+            https_rest.local_addr()
+        );
+        println!("      Mark one skill as revoked.");
+        println!(
+            "    POST https://{}/v1/bootstrap",
+            https_rest.local_addr()
+        );
+        println!("      Bootstrap an empty chain with an initial checkpoint.");
+        println!("    POST https://{}/v1/thoughts", https_rest.local_addr());
+        println!("      Append a durable thought.");
+        println!(
+            "    POST https://{}/v1/retrospectives",
+            https_rest.local_addr()
+        );
+        println!("      Append a retrospective thought.");
+        println!("    POST https://{}/v1/search", https_rest.local_addr());
+        println!("      Search thoughts by semantic and identity filters.");
+        println!(
+            "    POST https://{}/v1/recent-context",
+            https_rest.local_addr()
+        );
+        println!("      Render a recent-context prompt snippet.");
+        println!(
+            "    POST https://{}/v1/memory-markdown",
+            https_rest.local_addr()
+        );
+        println!("      Export a MEMORY.md-style markdown view.");
+        println!("    POST https://{}/v1/thought", https_rest.local_addr());
+        println!("      Read one thought by id, hash, or append-order index.");
+        println!(
+            "    POST https://{}/v1/thoughts/genesis",
+            https_rest.local_addr()
+        );
+        println!("      Return the first thought in append order.");
+        println!(
+            "    POST https://{}/v1/thoughts/traverse",
+            https_rest.local_addr()
+        );
+        println!("      Traverse thoughts forward or backward in filtered chunks.");
+        println!("    POST https://{}/v1/head", https_rest.local_addr());
+        println!("      Return the latest thought at the chain tip and head metadata.");
+        println!();
+    }
 }
 
 fn print_chain_summary(
@@ -433,4 +605,54 @@ fn print_chain_summary(
     }
 
     Ok(())
+}
+
+/// Prints TLS certificate trust instructions and the `my.mentisdb.com` tip,
+/// but only when at least one HTTPS listener is active.
+///
+/// `my.mentisdb.com` is a public DNS A-record that resolves to `127.0.0.1`,
+/// providing a human-friendly hostname for the local daemon once the
+/// self-signed certificate has been trusted.
+fn print_tls_tip(config: &MentisDbServerConfig, handles: &MentisDbServerHandles) {
+    if handles.https_mcp.is_none() && handles.https_rest.is_none() {
+        return;
+    }
+
+    let mcp_port = handles.https_mcp.as_ref().map(|h| h.local_addr().port());
+    let rest_port = handles.https_rest.as_ref().map(|h| h.local_addr().port());
+
+    println!("TLS Certificate: {}", config.tls_cert_path.display());
+    println!();
+    println!(
+        "  {YELLOW}my.mentisdb.com{RESET} is a public DNS A-record \u{2192} 127.0.0.1"
+    );
+    println!("  You can use it as a friendly hostname for this local daemon.");
+    if let Some(port) = mcp_port {
+        println!("  MCP:  https://my.mentisdb.com:{port}");
+    }
+    if let Some(port) = rest_port {
+        println!("  REST: https://my.mentisdb.com:{port}");
+    }
+    println!();
+    println!("  To avoid certificate warnings, trust the self-signed cert once:");
+    println!(
+        "  {GREEN}macOS{RESET}:   sudo security add-trusted-cert -d -r trustRoot \\"
+    );
+    println!(
+        "             -k /Library/Keychains/System.keychain \\"
+    );
+    println!(
+        "             {}",
+        config.tls_cert_path.display()
+    );
+    println!(
+        "  {GREEN}Linux{RESET}:   sudo cp {} /usr/local/share/ca-certificates/mentisdb.crt",
+        config.tls_cert_path.display()
+    );
+    println!("           sudo update-ca-certificates");
+    println!(
+        "  {GREEN}Windows{RESET}: certutil -addstore Root {}",
+        config.tls_cert_path.display()
+    );
+    println!();
 }

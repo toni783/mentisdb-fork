@@ -1,6 +1,6 @@
 [package]
 name = "mentisdb"
-version = "0.4.2"
+version = "0.5.0"
 authors = ["Angel Leon <gubatron@gmail.com>"]
 edition = "2021"
 license = "MIT"
@@ -13,7 +13,7 @@ categories = ["data-structures", "development-tools", "asynchronous"]
 
 [features]
 default = ["server"]
-server = ["dep:axum", "dep:env_logger", "dep:log", "dep:tokio", "mcp/server"]
+server = ["dep:axum", "dep:env_logger", "dep:log", "dep:tokio", "mcp/server", "dep:rcgen", "dep:axum-server", "dep:rustls-pemfile"]
 
 [dependencies]
 async-trait = "0.1.89"
@@ -28,8 +28,11 @@ sha2 = "0.10.9"
 uuid = { version = "1.22.0", features = ["v4", "serde"] }
 mcp = { package = "cloudllm_mcp", version = "0.1.0" }
 axum = { version = "0.8.8", optional = true }
+axum-server = { version = "0.7", features = ["tls-rustls"], optional = true }
 env_logger = { version = "0.11.8", optional = true }
 log = { version = "0.4.28", optional = true }
+rcgen = { version = "0.13", optional = true }
+rustls-pemfile = { version = "2", optional = true }
 tokio = { version = "1.50.0", features = ["full"], optional = true }
 
 [dev-dependencies]

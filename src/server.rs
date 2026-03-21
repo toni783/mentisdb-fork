@@ -63,7 +63,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+// TLS
+use axum_server::tls_rustls::RustlsConfig;
+use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType, date_time_ymd};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
@@ -187,14 +190,25 @@ impl MentisDbServiceConfig {
 /// let config = MentisDbServerConfig::from_env();
 /// assert!(config.mcp_addr.port() > 0);
 /// ```
+/// Configuration for the `mentisdbd` daemon's HTTP and HTTPS servers.
+///
+/// Built from environment variables via [`MentisDbServerConfig::from_env`].
 #[derive(Debug, Clone)]
 pub struct MentisDbServerConfig {
     /// Shared storage configuration for both HTTP servers.
     pub service: MentisDbServiceConfig,
-    /// Socket address to bind the MCP server to.
+    /// Socket address to bind the HTTP MCP server to.
     pub mcp_addr: SocketAddr,
-    /// Socket address to bind the REST server to.
+    /// Socket address to bind the HTTP REST server to.
     pub rest_addr: SocketAddr,
+    /// Socket address to bind the HTTPS MCP server to, or `None` if disabled (port 0).
+    pub https_mcp_addr: Option<SocketAddr>,
+    /// Socket address to bind the HTTPS REST server to, or `None` if disabled (port 0).
+    pub https_rest_addr: Option<SocketAddr>,
+    /// Path to the TLS certificate PEM file.
+    pub tls_cert_path: PathBuf,
+    /// Path to the TLS private key PEM file.
+    pub tls_key_path: PathBuf,
 }
 
 impl MentisDbServerConfig {
@@ -226,6 +240,29 @@ impl MentisDbServerConfig {
             .map(PathBuf::from);
         let mcp_port = env_u16(&["MENTISDB_MCP_PORT"]).unwrap_or(9471);
         let rest_port = env_u16(&["MENTISDB_REST_PORT"]).unwrap_or(9472);
+        let https_mcp_port = env_u16(&["MENTISDB_HTTPS_MCP_PORT"]).unwrap_or(9473);
+        let https_rest_port = env_u16(&["MENTISDB_HTTPS_REST_PORT"]).unwrap_or(9474);
+
+        let tls_dir = default_tls_dir();
+        let tls_cert_path = env_var(&["MENTISDB_TLS_CERT"])
+            .ok()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| tls_dir.join("cert.pem"));
+        let tls_key_path = env_var(&["MENTISDB_TLS_KEY"])
+            .ok()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| tls_dir.join("key.pem"));
+
+        let https_mcp_addr = if https_mcp_port > 0 {
+            Some(SocketAddr::new(bind_host, https_mcp_port))
+        } else {
+            None
+        };
+        let https_rest_addr = if https_rest_port > 0 {
+            Some(SocketAddr::new(bind_host, https_rest_port))
+        } else {
+            None
+        };
 
         Self {
             service: MentisDbServiceConfig::new(
@@ -241,6 +278,10 @@ impl MentisDbServerConfig {
             .with_auto_flush(auto_flush),
             mcp_addr: SocketAddr::new(bind_host, mcp_port),
             rest_addr: SocketAddr::new(bind_host, rest_port),
+            https_mcp_addr,
+            https_rest_addr,
+            tls_cert_path,
+            tls_key_path,
         }
     }
 }
@@ -289,7 +330,7 @@ impl ServerHandle {
     }
 }
 
-/// Handles for a running MentisDb MCP and REST server pair.
+/// Handles for a running MentisDb MCP and REST server pair (HTTP and optionally HTTPS).
 ///
 /// # Example
 ///
@@ -307,10 +348,14 @@ impl ServerHandle {
 /// ```
 #[derive(Debug)]
 pub struct MentisDbServerHandles {
-    /// Running MCP server handle.
+    /// Running HTTP MCP server handle.
     pub mcp: ServerHandle,
-    /// Running REST server handle.
+    /// Running HTTP REST server handle.
     pub rest: ServerHandle,
+    /// Running HTTPS MCP server handle, if HTTPS is enabled.
+    pub https_mcp: Option<ServerHandle>,
+    /// Running HTTPS REST server handle, if HTTPS is enabled.
+    pub https_rest: Option<ServerHandle>,
 }
 
 /// Return the default on-disk MentisDB directory.
@@ -334,6 +379,21 @@ pub fn default_mentisdb_dir() -> PathBuf {
             .unwrap_or_else(|_| PathBuf::from("."))
             .join(".cloudllm")
             .join(MENTISDB_DIRNAME)
+    }
+}
+
+/// Return the default on-disk TLS directory for `mentisdbd` self-signed certificates.
+///
+/// The default is `$HOME/.mentisdb/tls` when `HOME` is available,
+/// otherwise `./.mentisdb/tls`.
+fn default_tls_dir() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        PathBuf::from(home).join(".mentisdb").join("tls")
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(".mentisdb")
+            .join("tls")
     }
 }
 
@@ -514,13 +574,68 @@ pub async fn start_rest_server(
     start_router(addr, rest_router(config)).await
 }
 
+/// Start a standalone MentisDb MCP server over HTTPS/TLS.
+pub async fn start_https_mcp_server(
+    addr: SocketAddr,
+    config: MentisDbServiceConfig,
+    cert_path: PathBuf,
+    key_path: PathBuf,
+) -> Result<ServerHandle, Box<dyn Error + Send + Sync>> {
+    let service = Arc::new(MentisDbService::new(config));
+    start_tls_router(addr, standard_and_legacy_mcp_router(service, addr), cert_path, key_path).await
+}
+
+/// Start a standalone MentisDb REST server over HTTPS/TLS.
+pub async fn start_https_rest_server(
+    addr: SocketAddr,
+    config: MentisDbServiceConfig,
+    cert_path: PathBuf,
+    key_path: PathBuf,
+) -> Result<ServerHandle, Box<dyn Error + Send + Sync>> {
+    start_tls_router(addr, rest_router(config), cert_path, key_path).await
+}
+
 /// Start both the MCP and REST servers for `mentisdbd`.
 pub async fn start_servers(
     config: MentisDbServerConfig,
 ) -> Result<MentisDbServerHandles, Box<dyn Error + Send + Sync>> {
+    // Ensure TLS cert exists before starting HTTPS servers
+    if config.https_mcp_addr.is_some() || config.https_rest_addr.is_some() {
+        ensure_tls_cert(&config.tls_cert_path, &config.tls_key_path)?;
+    }
+
     let mcp = start_mcp_server(config.mcp_addr, config.service.clone()).await?;
-    let rest = start_rest_server(config.rest_addr, config.service).await?;
-    Ok(MentisDbServerHandles { mcp, rest })
+    let rest = start_rest_server(config.rest_addr, config.service.clone()).await?;
+
+    let https_mcp = if let Some(addr) = config.https_mcp_addr {
+        Some(
+            start_https_mcp_server(
+                addr,
+                config.service.clone(),
+                config.tls_cert_path.clone(),
+                config.tls_key_path.clone(),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
+    let https_rest = if let Some(addr) = config.https_rest_addr {
+        Some(
+            start_https_rest_server(
+                addr,
+                config.service,
+                config.tls_cert_path.clone(),
+                config.tls_key_path.clone(),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
+    Ok(MentisDbServerHandles { mcp, rest, https_mcp, https_rest })
 }
 
 /// Build the MCP router without binding a socket.
@@ -2460,6 +2575,89 @@ async fn start_router(
         })
         .await;
     });
+
+    Ok(ServerHandle::new(local_addr, shutdown_tx))
+}
+
+/// Generate a self-signed TLS certificate if the cert and key files do not yet exist.
+///
+/// The certificate includes the following Subject Alternative Names:
+/// - `my.mentisdb.com` (DNS)
+/// - `localhost` (DNS)
+/// - `127.0.0.1` (IP)
+///
+/// The cert is valid from 2025-01-01 to 2027-01-01. Both PEM files are written
+/// to the parent directory of `cert_path` (created if missing).
+///
+/// # Errors
+///
+/// Returns an error if key generation, certificate signing, or file I/O fails.
+fn ensure_tls_cert(
+    cert_path: &Path,
+    key_path: &Path,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    if cert_path.exists() && key_path.exists() {
+        return Ok(());
+    }
+
+    let key_pair = KeyPair::generate()?;
+
+    let mut params = CertificateParams::default();
+    let mut dn = DistinguishedName::new();
+    dn.push(DnType::CommonName, "MentisDB Local");
+    params.distinguished_name = dn;
+
+    params.subject_alt_names = vec![
+        SanType::DnsName("my.mentisdb.com".try_into()?),
+        SanType::DnsName("localhost".try_into()?),
+        SanType::IpAddress(std::net::IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))),
+    ];
+
+    params.not_before = date_time_ymd(2025, 1, 1);
+    params.not_after = date_time_ymd(2027, 1, 1);
+
+    let cert = params.self_signed(&key_pair)?;
+
+    if let Some(parent) = cert_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    fs::write(cert_path, cert.pem())?;
+    fs::write(key_path, key_pair.serialize_pem())?;
+
+    Ok(())
+}
+
+/// Bind a TLS (HTTPS) server to `addr`, serve `router`, and return a [`ServerHandle`].
+///
+/// Uses `axum-server` with `rustls` under the hood. The `cert_path` and `key_path`
+/// must point to valid PEM files (use [`ensure_tls_cert`] to generate them if missing).
+async fn start_tls_router(
+    addr: SocketAddr,
+    router: Router,
+    cert_path: PathBuf,
+    key_path: PathBuf,
+) -> Result<ServerHandle, Box<dyn Error + Send + Sync>> {
+    let tls_config = RustlsConfig::from_pem_file(&cert_path, &key_path).await?;
+    let axum_handle = axum_server::Handle::new();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+
+    // Bridge the oneshot shutdown into axum_server's graceful shutdown
+    let shutdown_axum_handle = axum_handle.clone();
+    tokio::spawn(async move {
+        let _ = shutdown_rx.await;
+        shutdown_axum_handle.graceful_shutdown(Some(std::time::Duration::from_secs(5)));
+    });
+
+    let server = axum_server::bind_rustls(addr, tls_config).handle(axum_handle.clone());
+    tokio::spawn(async move {
+        let _ = server
+            .serve(router.into_make_service_with_connect_info::<SocketAddr>())
+            .await;
+    });
+
+    // Wait for the server to actually bind so we can report the real port
+    let local_addr = axum_handle.listening().await.unwrap_or(addr);
 
     Ok(ServerHandle::new(local_addr, shutdown_tx))
 }

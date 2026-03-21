@@ -1,3 +1,17 @@
+0.5.0 MAR/21/2026
+ - feat: HTTPS/TLS support for mentisdbd
+   - Added HTTPS listeners for both MCP (port 9473) and REST (port 9474) alongside existing HTTP listeners
+   - Auto-generates a self-signed TLS certificate on first startup via `rcgen`, saved to `~/.mentisdb/tls/cert.pem` and `~/.mentisdb/tls/key.pem`
+   - Certificate includes SANs: `my.mentisdb.com`, `localhost`, `127.0.0.1`
+   - `my.mentisdb.com` is a public DNS A-record → 127.0.0.1; use it as a friendly hostname for the local daemon once the cert is trusted
+   - New env vars: `MENTISDB_HTTPS_MCP_PORT` (default 9473, 0=disabled), `MENTISDB_HTTPS_REST_PORT` (default 9474, 0=disabled), `MENTISDB_TLS_CERT`, `MENTISDB_TLS_KEY`
+   - Added `start_https_mcp_server` and `start_https_rest_server` public API functions
+   - `MentisDbServerConfig` extended with `https_mcp_addr`, `https_rest_addr`, `tls_cert_path`, `tls_key_path`
+   - `MentisDbServerHandles` extended with `https_mcp: Option<ServerHandle>`, `https_rest: Option<ServerHandle>`
+   - Daemon startup prints HTTPS endpoints, TLS cert path, per-OS cert trust commands, and `my.mentisdb.com` tip
+ - chore: Add `.env.example` documenting all supported environment variables with comments
+ - chore: Bump version to 0.5.0
+
 0.4.3.8 MAR/16/2026
  - chore: Add Makefile
    - Added `Makefile` to the standalone repository root with targets: `build`, `build-mentisdbd`, `release`, `fmt`, `check`, `clippy`, `test`, `bench`, `doc`, `publish`, `publish-dry-run`, `install`, `clean`, and `help`
