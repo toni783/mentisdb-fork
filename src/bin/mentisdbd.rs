@@ -1079,9 +1079,14 @@ fn print_agent_registry_summary(
                 if agents.is_empty() {
                     continue;
                 }
+                let thoughts = chain.thoughts();
                 let rows: Vec<Vec<String>> = agents
                     .into_iter()
                     .map(|agent| {
+                        let live_count = thoughts
+                            .iter()
+                            .filter(|t| t.agent_id == agent.agent_id)
+                            .count();
                         let desc = agent
                             .description
                             .as_deref()
@@ -1096,7 +1101,7 @@ fn print_agent_registry_summary(
                             agent.display_name.clone(),
                             agent.agent_id.clone(),
                             agent.status.to_string(),
-                            agent.thought_count.to_string(),
+                            live_count.to_string(),
                             desc,
                         ]
                     })
