@@ -1,40 +1,29 @@
-name: Build MentisDB (ARM64)
+name: Build ARM64
 
 on:
-  push:
-    branches: ["main"]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Add ARM target
-        run: rustup target add aarch64-unknown-linux-gnu
-
-      - name: Install cross compiler
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-
-      - name: Build (ARM64)
-        run: |
-          export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
-          cargo build --release --target aarch64-unknown-linux-gnu
-
-      - name: Package artifact
-        run: |
-          mkdir -p output
-          cp target/aarch64-unknown-linux-gnu/release/mentisdbd output/ || true
-          tar -czf mentisdb-arm64.tar.gz output
-
-      - name: Upload artifact
+      - uses: actions/checkout@v4
+        with:
+          repository: CloudLLM-ai/mentisdb
+          ref: master
+      
+      - name: List files
+        run: ls -la
+      
+      - name: Build for ARM64
+        uses: houseabsolute/actions-rust-cross@v0
+        with:
+          target: aarch64-unknown-linux-gnu
+          args: --release --bin mentisdbd --features vendored-openssl
+      
+      - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: mentisdb-arm64
-          path: mentisdb-arm64.tar.gz
+          name: mentisdbd-arm64
+          path: target/aarch64-unknown-linux-gnu/release/mentisdbd
