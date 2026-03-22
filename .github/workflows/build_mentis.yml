@@ -1,8 +1,8 @@
-name: Build MentisDB (ARM64 with RustTLS)
+name: Build MentisDB for Raspberry Pi (ARM64)
 
 on:
   push:
-    branches: ["main"]
+    branches: ["master"]
   workflow_dispatch:
 
 jobs:
@@ -10,30 +10,34 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      # 1️⃣ Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
+      # 2️⃣ Install Rust (stable)
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # 3️⃣ Install cross (handles cross-compilation + OpenSSL)
+      - name: Install cross
+        run: cargo install cross
+
+      # 4️⃣ Add target for ARM64
       - name: Add ARM target
         run: rustup target add aarch64-unknown-linux-gnu
 
-      - name: Install build deps
-        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config
+      # 5️⃣ Build using cross
+      - name: Build MentisDB ARM64
+        run: cross build --release --target aarch64-unknown-linux-gnu
 
-      - name: Build using RustTLS
-        run: |
-          cargo build --release \
-            --target aarch64-unknown-linux-gnu \
-            --no-default-features \
-            --features rustls
-
+      # 6️⃣ Package the binary
       - name: Package artifact
         run: |
           mkdir -p output
           cp target/aarch64-unknown-linux-gnu/release/mentisdbd output/
           tar -czf mentisdb-arm64.tar.gz output
 
+      # 7️⃣ Upload artifact
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
